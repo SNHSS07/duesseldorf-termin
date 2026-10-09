@@ -10,10 +10,7 @@ def send_telegram_photo(caption, image_path):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     try:
         with open(image_path, "rb") as img:
-            files = {"photo": img}
-            data = {"chat_id": CHAT_ID, "caption": caption}
-            res = requests.post(url, data=data, files=files, timeout=30)
-            print(f"Telegram yaniti: {res.status_code}")
+            requests.post(url, data={"chat_id": CHAT_ID, "caption": caption}, files={"photo": img}, timeout=30)
     except Exception as e:
         print(f"Gorsel gonderme hatasi: {e}")
 
@@ -21,75 +18,77 @@ def run():
     print("Düsseldorf randevu botu baslatiliyor...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1366, "height": 900}
-        )
+        context = browser.new_context(viewport={"width": 1280, "height": 1000})
         page = context.new_page()
 
         try:
-            # 1. Ana sayfaya git
-            print("1. Ana sayfa aciliyor...")
             page.goto("https://termine.duesseldorf.de/", timeout=60000)
+            page.wait_for_timeout(2000)
+
+            # 1. Cerez temizligi
+            page.evaluate("document.querySelectorAll('div[class*=\"cookie\"], .modal-backdrop').forEach(el => el.remove());")
+
+            # 2. Adim 1
+            page.locator("text=Fahrerlaubnisbehörde").first.click(force=True)
             page.wait_for_timeout(2500)
 
-            # Çerez (Cookie) katmanını temizle
-            page.evaluate("""
-                () => {
-                    const elements = document.querySelectorAll('div[class*="cookie"], div[id*="cookie"], .modal-backdrop, .overlay');
-                    elements.forEach(el => el.remove());
-                }
-            """)
-
-            # 2. Schritt 1: Fahrerlaubnisbehörde seç
-            print("2. Fahrerlaubnisbehörde seciliyor...")
-            page.locator("text=Fahrerlaubnisbehörde").first.click(force=True)
-            page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(2000)
-
-            # 3. Schritt 2: Akordiyon başlığını aç
-            print("3. Akordiyon basligi aciliyor...")
-            accordion = page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first
-            accordion.scroll_into_view_if_needed()
-            accordion.click(force=True)
+            # 3. Adim 2 - Akordiyon
+            page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first.click(force=True)
             page.wait_for_timeout(1500)
 
-            # 4. 'sonstige Staaten' satırını bul ve sağdaki mavi '+' butonuna tıkla
-            print("4. 'sonstige Staaten' '+' butonuna basiliyor...")
-            page.evaluate("""
-                () => {
-                    const rows = Array.from(document.querySelectorAll('tr, .row, div'));
-                    const targetRow = rows.find(r => r.innerText && r.innerText.includes('sonstige Staaten') && !r.innerText.includes('Auswahl des Anliegens'));
-                    if (targetRow) {
-                        // Satırdaki son tıklanabilir eleman mavi '+' butonudur
-                        const buttons = Array.from(targetRow.querySelectorAll('a, button, input[type="button"], div[role="button"]'));
-                        if (buttons.length > 0) {
-                            buttons[buttons.length - 1].click();
-                        }
-                    }
+            # 4. Artiya bas
+            page.evaluate("""() => {
+                const rows = Array.from(document.querySelectorAll('*'));
+                const targetText = rows.find(el => el.children.length === 0 && el.textContent.includes('sonstige Staaten'));
+                if (targetText) {
+                    const row = targetText.closest('tr') || targetText.closest('li') || targetText.parentElement.parentElement;
+                    const btns = Array.from(row.querySelectorAll('button, a, input[type="button"], div[role="button"]'));
+                    if (btns.length > 0) btns[btns.length - 1].click();
                 }
-            """)
+            }""")
             page.wait_for_timeout(2000)
 
-            # 5. Açılan 'Hinweis' modal penceresindeki mavi onay butonuna tıkla
-            print("5. Modal pencere onaylaniyor...")
-            page.evaluate("""
-                () => {
-                    const modals = document.querySelectorAll('.modal.show, .modal.in, div[role="dialog"]');
-                    modals.forEach(modal => {
-                        const btns = Array.from(modal.querySelectorAll('button, a, input'));
-                        const confirmBtn = btns.find(b => b.innerText && (b.innerText.includes('OK') || b.innerText.includes('Schließen')));
-                        if (confirmBtn) {
-                            confirmBtn.click();
-                        }
-                    });
-                }
-            """)
+            # 5. OK bas
+            page.evaluate("""() => {
+                const ok = Array.from(document.querySelectorAll('button, a')).find(b => b.innerText && b.innerText.includes('OK'));
+                if (ok) ok.click();
+            }""")
             page.wait_for_timeout(2000)
 
-            # 6. Schritt 2 altındaki ilk 'Weiter' butonuna tıkla
-            print("6. Schritt 2 -> Weiter tiklaniyor...")
-            page.evaluate("""
-                () => {
-                    const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
-                    if (btn
+            # 6. 1. Weiter
+            page.evaluate("""() => {
+                const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
+                if (btn) { btn.removeAttribute('disabled'); btn.click(); }
+            }""")
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            # 7. 2. Weiter
+            page.evaluate("""() => {
+                const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
+                if (btn) { btn.removeAttribute('disabled'); btn.click(); }
+            }""")
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            # 8. Screenshot
+            screenshot_path = "ekran.png"
+            page.screenshot(path=screenshot_path, full_page=True)
+
+            # 9. Kontrol
+            text = page.locator("body").inner_text().lower()
+            no_termin = "keine zeiten verfügbar" in text or "keine freien termine" in text
+            slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
+
+            if not no_termin and slots.count() > 0:
+                send_telegram_photo("🚨 RANDEVU BULUNDU! 🚨\nhttps://termine.duesseldorf.de", screenshot_path)
+            elif datetime.utcnow().minute <= 7 or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+                send_telegram_photo("ℹ️ Durum Raporu: Su an bos randevu yok.", screenshot_path)
+
+        except Exception as e:
+            print(f"Hata: {e}")
+        finally:
+            browser.close()
+
+if __name__ == "__main__":
+    run()
