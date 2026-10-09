@@ -13,7 +13,7 @@ def send_telegram_photo(caption, image_path):
             files = {"photo": img}
             data = {"chat_id": CHAT_ID, "caption": caption}
             res = requests.post(url, data=data, files=files, timeout=30)
-            print("Telegram yaniti:", res.status_code)
+            print("Telegram cevabi:", res.status_code)
     except Exception as e:
         print(f"Gorsel gonderme hatasi: {e}")
 
@@ -35,10 +35,9 @@ def run():
             # Çerez engelini kaldır
             page.evaluate("""
                 () => {
-                    const cookieElements = document.querySelectorAll('div[class*="cookie"], div[id*="cookie"], .modal-backdrop');
-                    cookieElements.forEach(el => el.remove());
-                    const btns = Array.from(document.querySelectorAll('button, a'));
-                    const accept = btns.find(b => b.textContent && b.textContent.includes('Akzeptieren'));
+                    const cookies = document.querySelectorAll('div[class*="cookie"], div[id*="cookie"], .modal-backdrop');
+                    cookies.forEach(el => el.remove());
+                    const accept = Array.from(document.querySelectorAll('button, a')).find(b => b.innerText && b.innerText.includes('Akzeptieren'));
                     if (accept) accept.click();
                 }
             """)
@@ -55,32 +54,38 @@ def run():
             page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first.click(force=True)
             page.wait_for_timeout(1500)
 
-            # 4. 'sonstige Staaten' satırındaki mavi '+' butonuna fiziksel tıkla
-            print("3. Adim: 'sonstige Staaten' '+' butonuna basiliyor...")
-            # İlgili satırı bulup içindeki son tıklanabilir butonu/linki tetikle
-            target_row = page.locator("div, tr").filter(has_text="sonstige Staaten").last
-            # Mavi artı butonu bu satırın içindeki '+' içeren veya ekle sınıfı olan son elemandır
-            plus_btn = target_row.locator("a, button, span, div").filter(has_text="+").last
+            # 4. 'sonstige Staaten' satırını bul ve o satırdaki mavi '+' butonuna FİZİKSEL tıkla
+            print("3. Adim: 'sonstige Staaten' satirindaki buton tiklaniyor...")
+            # Satırı buluyoruz
+            target_row = page.locator("tr, div").filter(has_text="Umschreibung ausländischer Führerschein (sonstige Staaten)").last
+            
+            # Bu satırın içindeki tüm buton benzeri elemanlardan SONUNCUSU (sağdaki mavi + butonu)
+            plus_btn = target_row.locator("button, a, input[type='button'], div[role='button']").last
+            plus_btn.scroll_into_view_if_needed()
             plus_btn.click(force=True)
+            print("Butona basildi.")
             page.wait_for_timeout(2000)
 
-            # 5. Açılan 'Hinweis' modal penceresindeki 'OK' butonuna bas
-            print("4. Adim: Pop-up 'OK' butonuna basiliyor...")
+            # 5. Açılan 'Hinweis' modalındaki 'OK' butonuna bas
+            print("4. Adim: Modal OK butonu bekleniyor...")
             ok_btn = page.locator("button:has-text('OK'), a:has-text('OK')").first
-            if ok_btn.is_visible():
-                ok_btn.click(force=True)
-                page.wait_for_timeout(1500)
+            ok_btn.wait_for(state="visible", timeout=5000)
+            ok_btn.click(force=True)
+            print("Modal OK tiklandi.")
+            page.wait_for_timeout(1500)
 
-            # 6. Schritt 2 altındaki ilk 'Weiter' butonuna bas
-            print("5. Adim: 1. Weiter butonuna basiliyor...")
+            # 6. Schritt 2 altındaki ilk 'Weiter' butonuna tıkla
+            print("5. Adim: 1. Weiter tiklaniyor...")
             weiter_1 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            weiter_1.wait_for(state="visible", timeout=5000)
             weiter_1.click(force=True)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(3000)
 
-            # 7. Schritt 3: İkinci 'Weiter' butonuna bas
-            print("6. Adim: 2. Weiter butonuna basiliyor...")
+            # 7. Schritt 3 (Standortauswahl): İkinci 'Weiter' butonuna tıkla
+            print("6. Adim: 2. Weiter tiklaniyor...")
             weiter_2 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            weiter_2.wait_for(state="visible", timeout=5000)
             weiter_2.click(force=True)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(4000)
@@ -88,7 +93,7 @@ def run():
             # 8. Schritt 4: Ekran görüntüsünü al
             screenshot_path = "ekran_kaniti.png"
             page.screenshot(path=screenshot_path, full_page=True)
-            print("7. Adim: Ekran goruntusu kaydedildi.")
+            print("7. Adim: Schritt 4 ekran goruntusu alindi.")
 
             # 9. Randevu kontrolü
             body_text = page.locator("body").inner_text().lower()
@@ -104,11 +109,11 @@ def run():
                 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
                 if current_minute <= 7 or event_name == "workflow_dispatch":
-                    print("Saat basi kanit fotografi gonderiliyor...")
+                    print("Saat basi raporu gonderiliyor...")
                     caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok (Schritt 4 kanıtı ektedir)."
                     send_telegram_photo(caption, screenshot_path)
                 else:
-                    print(f"5 dakikalık periyodik kontrol tamamlandi (Dakika: {current_minute}). Bos yer yok.")
+                    print(f"5 dakikalık sessiz kontrol tamamlandi (Dakika: {current_minute}). Boş yer yok.")
 
         except Exception as e:
             print(f"Hata detayi: {e}")
