@@ -13,12 +13,12 @@ def send_telegram_photo(caption, image_path):
             files = {"photo": img}
             data = {"chat_id": CHAT_ID, "caption": caption}
             res = requests.post(url, data=data, files=files, timeout=30)
-            print("Telegram cevabı:", res.status_code, res.text)
+            print("Telegram cevabi:", res.status_code)
     except Exception as e:
-        print(f"Görsel gönderme hatası: {e}")
+        print(f"Görsel gönderme hatasi: {e}")
 
 def run():
-    print("Düsseldorf randevu botu başlatılıyor...")
+    print("Düsseldorf randevu botu baslatiliyor...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -33,65 +33,107 @@ def run():
             page.wait_for_timeout(3000)
 
             # Çerez uyarısını kapat
-            accept_btn = page.locator("button:has-text('Akzeptieren'), a:has-text('Akzeptieren')").first
-            if accept_btn.is_visible():
-                accept_btn.click()
-                page.wait_for_timeout(1000)
+            page.evaluate("""
+                () => {
+                    const btns = Array.from(document.querySelectorAll('*'));
+                    const accept = btns.find(b => b.innerText && b.innerText.trim() === 'Akzeptieren');
+                    if (accept) accept.click();
+                }
+            """)
+            page.wait_for_timeout(1000)
 
-            # 2. Schritt 2 ekranında değilsek Fahrerlaubnis seç
-            if not page.locator("text=Auswahl des Anliegens").is_visible():
-                page.locator("text=Fahrerlaubnis").first.click()
+            # 2. Schritt 2'de değilsek Fahrerlaubnis seç
+            if "schritt 2" not in page.locator("body").inner_text().lower():
+                page.evaluate("""
+                    () => {
+                        const all = Array.from(document.querySelectorAll('*'));
+                        const item = all.find(el => el.innerText && el.innerText.trim() === 'Fahrerlaubnis');
+                        if (item) item.click();
+                    }
+                """)
                 page.wait_for_timeout(2000)
 
-            # 3. Akordiyon menüyü aç
-            acc_header = page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first
-            acc_header.scroll_into_view_if_needed()
-            acc_header.click()
+            # 3. Akordiyon başlığını aç (Umschreibung ausländische Fahrerlaubnis...)
+            print("Akordiyon basligi aciliyor...")
+            page.evaluate("""
+                () => {
+                    const all = Array.from(document.querySelectorAll('*'));
+                    const acc = all.find(el => el.innerText && el.innerText.includes('Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis'));
+                    if (acc) acc.click();
+                }
+            """)
             page.wait_for_timeout(1500)
 
-            # 4. 'sonstige Staaten' satırını bul ve yanındaki '+' butonuna tıkla
-            service_row = page.locator("div, tr").filter(has_text="Umschreibung ausländischer Führerschein (sonstige Staaten)").last
-            plus_btn = service_row.locator("button, input[type='button'], .btn, a").filter(has_text="+").first
-            
-            plus_btn.scroll_into_view_if_needed()
-            plus_btn.click()
-            print("'+' butonuna tıklandı.")
-            page.wait_for_timeout(1500)
+            # 4. 'sonstige Staaten' satırını ve yanındaki '+' elementini tıkla
+            print("Hizmetin '+' ikonuna tiklaniyor...")
+            clicked = page.evaluate("""
+                () => {
+                    // Metni barındıran en alt elemanı bul
+                    const all = Array.from(document.querySelectorAll('*'));
+                    const match = all.find(el => el.children.length === 0 && el.textContent.includes('sonstige Staaten'));
+                    if (!match) return false;
 
-            # 5. Açılan 'Hinweis' modal penceresindeki mavi 'OK' butonuna bas
-            ok_modal_btn = page.locator(".modal, div[role='dialog'], body").locator("button:has-text('OK'), a:has-text('OK')").first
-            if ok_modal_btn.is_visible():
-                ok_modal_btn.click()
-                print("Modal 'OK' butonuna tıklandı.")
-                page.wait_for_timeout(1500)
+                    // Satır kapsayıcısını bul
+                    let parent = match.parentElement;
+                    while (parent && parent.tagName !== 'TR' && !parent.classList.contains('row') && !parent.classList.contains('concern')) {
+                        if (parent.querySelector('button, .btn, span, a')) break;
+                        parent = parent.parentElement;
+                    }
+
+                    // Satırdaki tüm elemanlar içinde text'i '+' olanı bul ve tıkla
+                    const rowElements = Array.from((parent || document).querySelectorAll('*'));
+                    const plus = rowElements.find(el => el.textContent.trim() === '+' || el.value === '+');
+                    if (plus) {
+                        plus.click();
+                        return true;
+                    }
+                    return false;
+                }
+            """)
+            print(f"Plus butonuna tiklandi mi: {clicked}")
+            page.wait_for_timeout(2000)
+
+            # 5. Açılan 'Hinweis' modal penceresindeki 'OK' butonuna tıkla
+            print("Modal OK araniyor...")
+            page.evaluate("""
+                () => {
+                    const all = Array.from(document.querySelectorAll('button, a, input'));
+                    const okBtn = all.find(el => el.innerText && el.innerText.trim().startsWith('OK'));
+                    if (okBtn) okBtn.click();
+                }
+            """)
+            page.wait_for_timeout(2000)
 
             # 6. Schritt 2 altındaki 'Weiter' butonuna tıkla
-            weiter_1 = page.locator("#WeiterButton, input[value='Weiter']").first
-            weiter_1.scroll_into_view_if_needed()
-            weiter_1.click(force=True)
-            print("Schritt 2 'Weiter' butonuna tıklandı.")
-            
+            print("1. Weiter tiklaniyor...")
+            page.evaluate("""
+                () => {
+                    const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
+                    if (btn) btn.click();
+                }
+            """)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(3000)
 
             # 7. Schritt 3 (Standortauswahl): İkinci 'Weiter' butonuna tıkla
-            weiter_2 = page.locator("#WeiterButton, input[value='Weiter']").first
-            weiter_2.scroll_into_view_if_needed()
-            weiter_2.click(force=True)
-            print("Schritt 3 'Weiter' butonuna tıklandı.")
-
+            print("2. Weiter tiklaniyor...")
+            page.evaluate("""
+                () => {
+                    const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
+                    if (btn) btn.click();
+                }
+            """)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
             # 8. Schritt 4: Ekran görüntüsünü al
             screenshot_path = "ekran_kaniti.png"
             page.screenshot(path=screenshot_path, full_page=True)
-            print("Ekran görüntüsü kaydedildi.")
+            print("Ekran goruntusu kaydedildi.")
 
             # 9. Randevu var mı kontrol et
             body_text = page.locator("body").inner_text().lower()
             no_termin = "keine zeiten verfügbar" in body_text or "keine freien termine" in body_text
-
             slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
 
             if not no_termin and slots.count() > 0:
@@ -103,14 +145,14 @@ def run():
                 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
                 if current_minute <= 7 or event_name == "workflow_dispatch":
-                    print("Saat başı raporu gönderiliyor...")
+                    print("Saat basi raporu gonderiliyor...")
                     caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Ekran görüntüsü ektedir."
                     send_telegram_photo(caption, screenshot_path)
                 else:
-                    print(f"Sessiz tarama tamamlandı (Dakika: {current_minute}). Boş yer yok.")
+                    print(f"Sessiz tarama tamamlandi (Dakika: {current_minute}). Boş yer yok.")
 
         except Exception as e:
-            print(f"Hata detayı: {e}")
+            print(f"Hata detayi: {e}")
         finally:
             browser.close()
 
