@@ -11,7 +11,7 @@ def send_telegram(msg):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Telegram gonderim hatasi: {e}")
+        print(f"Telegram hatasi: {e}")
 
 def run():
     print("Düsseldorf randevu botu baslatiliyor...")
@@ -27,67 +27,61 @@ def run():
             page.goto("https://termine.duesseldorf.de/", timeout=60000)
             page.wait_for_timeout(3000)
 
-            # 2. Çerez veya bilgilendirme kutusu varsa kabul et / geç
-            cookie_btn = page.locator("button:has-text('Akzeptieren'), button:has-text('Zustimmen'), button:has-text('Schließen')")
-            if cookie_btn.count() > 0 and cookie_btn.first.is_visible():
-                cookie_btn.first.click()
+            # Çerez kutusu varsa kapat
+            cookie = page.locator("button:has-text('Akzeptieren'), button:has-text('Zustimmen'), button:has-text('Schließen')")
+            if cookie.count() > 0 and cookie.first.is_visible():
+                cookie.first.click()
                 page.wait_for_timeout(1000)
 
-            # 3. "Fahrerlaubnisbehörde" veya ehliyet bölümünü bulup tıkla
-            category = page.locator("text=Fahrerlaubnis").first
-            if category.is_visible():
-                category.click()
-                page.wait_for_timeout(1500)
+            # 2. Fahrerlaubnis kategorisini tıkla
+            page.locator("text=Fahrerlaubnis").first.click()
+            page.wait_for_timeout(2000)
 
-            # 4. "Umschreibung ausländischer Führerschein" hizmet satırını bul
-            service_row = page.locator("tr, div, li").filter(has_text="Umschreibung ausländischer Führerschein (sonstige Staaten)").first
+            # 3. Umschreibung satırını bul ve 1 adet seç
+            row = page.locator("tr, div").filter(has_text="Umschreibung ausländischer Führerschein (sonstige Staaten)").first
             
-            if service_row.is_visible():
-                # Yanındaki '+' butonunu tıkla (sayıyı 1 yap)
-                plus_button = service_row.locator("button:has-text('+'), input[type='button'][value='+'], .btn-plus").first
-                if plus_button.is_visible():
-                    plus_button.click()
-                else:
-                    select_box = service_row.locator("select").first
-                    if select_box.is_visible():
-                        select_box.select_option("1")
+            # Artı butonu varsa tıkla, select kutusu varsa 1 yap
+            plus = row.locator("input[value='+'], button:has-text('+')").first
+            if plus.is_visible():
+                plus.click()
             else:
-                print("Hizmet başlığı sayfada doğrudan bulunamadı, genel sayfa kontrol ediliyor...")
+                select = row.locator("select").first
+                if select.is_visible():
+                    select.select_option("1")
 
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
 
-            # 5. 'Weiter' butonuna tıkla
-            next_btn = page.locator("input[value*='Weiter'], button:has-text('Weiter'), a:has-text('Weiter')").first
-            if next_btn.is_visible():
-                next_btn.click()
-                page.wait_for_load_state("networkidle", timeout=30000)
-                page.wait_for_timeout(3000)
+            # 4. Sayfanın en altındaki Weiter butonuna tıkla
+            next_btn = page.locator("input[type='submit'][value*='Weiter'], button:has-text('Weiter'), input[value*='Weiter']").first
+            next_btn.click()
+            
+            # Takvim sayfasının yüklenmesini bekle
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(5000)
 
-            # 6. 4. Adım (Terminvorschläge) kontrolü
-            content = page.content().lower()
+            # 5. GERÇEK RANDEVU KONTROLÜ
+            # Takvimde tıklanabilir gün/saat var mı?
+            # TEVIS sisteminde randevusu olan günler aktif link veya buton olur
+            body_text = page.locator("body").inner_text().lower()
 
-            no_termin_phrases = [
-                "keine zeiten verfügbar",
-                "keine freien termine",
-                "im moment sind leider keine freien termine verfügbar"
-            ]
+            # Açıkça randevu yok yazıyorsa:
+            if "keine zeiten verfügbar" in body_text or "keine freien termine" in body_text:
+                print("Sonuç: Takvim ekranına ulaşıldı, boş randevu yok.")
+                return
 
-            has_no_termin = any(phrase in content for phrase in no_termin_phrases)
-
-            if has_no_termin:
-                print("Kontrol tamamlandı: Şu an müsait randevu bulunmuyor.")
+            # Tıklanabilir randevu butonlarını ara (TEVIS şablonu sınıfları)
+            slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
+            
+            if slots.count() > 0:
+                print(f"BULDUM! {slots.count()} adet uygun randevu slotu var!")
+                send_telegram(
+                    "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\n\n"
+                    "Ehliyet denkliği için GERÇEK randevu açıldı!\n"
+                    "Hemen al:\n"
+                    "https://termine.duesseldorf.de"
+                )
             else:
-                if "umschreibung" in content or "terminvorschläge" in content:
-                    msg = (
-                        "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\n\n"
-                        "Ehliyet denkliği için randevu slotu bulundu!\n"
-                        "Hemen girip randevunuzu onaylayın:\n"
-                        "https://termine.duesseldorf.de"
-                    )
-                    print("Boş randevu yakalandı! Telegram'a bildirim gönderiliyor.")
-                    send_telegram(msg)
-                else:
-                    print("Sayfa adımları geçilemedi veya farklı bir sayfada kalındı.")
+                print("Sonuç: Takvimde seçilebilir boş gün/saat bulunamadı (Yanlış alarm engellendi).")
 
         except Exception as e:
             print(f"Hata oluştu: {e}")
