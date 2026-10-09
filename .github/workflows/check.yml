@@ -2,7 +2,7 @@ name: Randevu Kontrolcusu
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/5 * * * *'   # Her 5 dakikada bir çalışır
   workflow_dispatch:
 
 jobs:
@@ -15,15 +15,16 @@ jobs:
       - name: Python Kur
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Kutuphaneleri Yukle
         run: |
           pip install playwright requests
-          playwright install --with-deps chromium
+          playwright install chromium
 
       - name: Randevuyu Tara
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python bot.py
