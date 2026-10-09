@@ -1,94 +1,130 @@
-import os
-import requests
-from datetime import datetime
+import os, re, datetime, requests
 from playwright.sync_api import sync_playwright
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+URL = "https://termine.duesseldorf.de/"
+TOKEN = os.environ["TELEGRAM_TOKEN"]
+CHAT = os.environ["TELEGRAM_CHAT_ID"]
+API = f"https://api.telegram.org/bot{TOKEN}"
+MANUAL = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+SHOT = "screen.png"
 
-def send_telegram_photo(caption, image_path):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+
+def send_text(text):
+    requests.post(f"{API}/sendMessage", data={"chat_id": CHAT, "text": text}, timeout=30)
+
+
+def send_photo(caption):
+    with open(SHOT, "rb") as f:
+        requests.post(f"{API}/sendPhoto", data={"chat_id": CHAT, "caption": caption},
+                      files={"photo": f}, timeout=60)
+
+
+def accept_cookies(page):
+    for name in ["Alle akzeptieren", "Alle Cookies akzeptieren", "Akzeptieren",
+                 "Zustimmen", "Alle zulassen", "Einverstanden", "OK"]:
+        try:
+            btn = page.get_by_role("button", name=re.compile(name, re.I)).first
+            if btn.is_visible(timeout=1500):
+                btn.click()
+                page.wait_for_timeout(800)
+                return
+        except Exception:
+            pass
+
+
+def click_text(page, text, exact=False):
+    page.get_by_text(text, exact=exact).first.click(timeout=15000)
+    page.wait_for_timeout(1200)
+
+
+def click_weiter(page):
+    page.get_by_role("button", name=re.compile(r"^\s*Weiter\s*$")).first.click(timeout=15000) \
+        if page.get_by_role("button", name=re.compile(r"^\s*Weiter\s*$")).count() \
+        else page.get_by_text("Weiter", exact=True).last.click(timeout=15000)
+    page.wait_for_timeout(1500)
+
+
+def dismiss_hinweis(page):
+    """Hinweis-Popup'ı varsa OK'e bas."""
     try:
-        with open(image_path, "rb") as img:
-            requests.post(url, data={"chat_id": CHAT_ID, "caption": caption}, files={"photo": img}, timeout=30)
-    except Exception as e:
-        print(f"Gorsel gonderme hatasi: {e}")
+        ok = page.get_by_text("OK", exact=True).first
+        if ok.is_visible(timeout=2500):
+            ok.click()
+            page.wait_for_timeout(1500)
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def run():
-    print("Düsseldorf randevu botu baslatiliyor...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1280, "height": 1000})
-        page = context.new_page()
-
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 1000}, locale="de-DE")
         try:
-            page.goto("https://termine.duesseldorf.de/", timeout=60000)
+            page.goto(URL, wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(2000)
+            accept_cookies(page)
 
-            # 1. Cerez temizligi
-            page.evaluate("document.querySelectorAll('div[class*=\"cookie\"], .modal-backdrop').forEach(el => el.remove());")
+            # Adım 1: Fahrerlaubnisbehörde
+            click_text(page, "Fahrerlaubnisbehörde", exact=True)
+            accept_cookies(page)
 
-            # 2. Adim 1
-            page.locator("text=Fahrerlaubnisbehörde").first.click(force=True)
-            page.wait_for_timeout(2500)
+            # Adım 2: Umschreibung ... akordeonunu aç
+            click_text(page, "Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis")
 
-            # 3. Adim 2 - Akordiyon
-            page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first.click(force=True)
+            # "(sonstige Staaten)" satırındaki + simgesine koordinatla tıkla
+            label = page.get_by_text("sonstige Staaten").first
+            label.wait_for(timeout=15000)
+            label.scroll_into_view_if_needed()
+            lb = label.bounding_box()
+            weiter = page.get_by_text("Weiter", exact=True).last
+            wb = weiter.bounding_box()
+            plus_x = wb["x"] + wb["width"] - 46      # + simgesi sağ kenara ~46px mesafede
+            plus_y = lb["y"] + lb["height"] / 2
+            page.mouse.click(plus_x, plus_y)
             page.wait_for_timeout(1500)
 
-            # 4. Artiya bas
-            page.evaluate("""() => {
-                const rows = Array.from(document.querySelectorAll('*'));
-                const targetText = rows.find(el => el.children.length === 0 && el.textContent.includes('sonstige Staaten'));
-                if (targetText) {
-                    const row = targetText.closest('tr') || targetText.closest('li') || targetText.parentElement.parentElement;
-                    const btns = Array.from(row.querySelectorAll('button, a, input[type="button"], div[role="button"]'));
-                    if (btns.length > 0) btns[btns.length - 1].click();
-                }
-            }""")
-            page.wait_for_timeout(2000)
+            dismiss_hinweis(page)       # + sonrası popup çıkarsa OK
+            click_weiter(page)
+            dismiss_hinweis(page)       # Weiter sonrası popup çıkarsa OK
 
-            # 5. OK bas
-            page.evaluate("""() => {
-                const ok = Array.from(document.querySelectorAll('button, a')).find(b => b.innerText && b.innerText.includes('OK'));
-                if (ok) ok.click();
-            }""")
-            page.wait_for_timeout(2000)
+            # Adım 3: Standort -> Weiter
+            page.wait_for_timeout(1500)
+            if page.get_by_text("Standort", exact=False).count():
+                try:
+                    click_weiter(page)
+                except Exception:
+                    pass
 
-            # 6. 1. Weiter
-            page.evaluate("""() => {
-                const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
-                if (btn) { btn.removeAttribute('disabled'); btn.click(); }
-            }""")
-            page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-
-            # 7. 2. Weiter
-            page.evaluate("""() => {
-                const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
-                if (btn) { btn.removeAttribute('disabled'); btn.click(); }
-            }""")
-            page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-
-            # 8. Screenshot
-            screenshot_path = "ekran.png"
-            page.screenshot(path=screenshot_path, full_page=True)
-
-            # 9. Kontrol
-            text = page.locator("body").inner_text().lower()
-            no_termin = "keine zeiten verfügbar" in text or "keine freien termine" in text
-            slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
-
-            if not no_termin and slots.count() > 0:
-                send_telegram_photo("🚨 RANDEVU BULUNDU! 🚨\nhttps://termine.duesseldorf.de", screenshot_path)
-            elif datetime.utcnow().minute <= 7 or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-                send_telegram_photo("ℹ️ Durum Raporu: Su an bos randevu yok.", screenshot_path)
-
-        except Exception as e:
-            print(f"Hata: {e}")
-        finally:
+            page.wait_for_timeout(4000)
+            page.screenshot(path=SHOT, full_page=True)
+            text = page.inner_text("body").lower()
             browser.close()
+            return text
+        except Exception as e:
+            try:
+                page.screenshot(path=SHOT, full_page=True)
+            except Exception:
+                pass
+            browser.close()
+            raise e
 
-if __name__ == "__main__":
-    run()
+
+try:
+    body = run()
+    no_slot = ("keine zeiten verfügbar" in body) or ("keine freien termine" in body)
+    minute = datetime.datetime.utcnow().minute
+
+    if not no_slot:
+        send_text("🚨 RANDEVU ÇIKMIŞ OLABİLİR! Hemen gir:\nhttps://termine.duesseldorf.de/\n"
+                  "(Ya randevu açıldı ya da sayfa yapısı değişti, ekran görüntüsüne bak.)")
+        send_photo("Sayfanın şu anki hali")
+    elif MANUAL or minute < 5:
+        send_photo("Hâlâ randevu yok (Keine Zeiten verfügbar), aramaya devam ediyorum.")
+except Exception as e:
+    minute = datetime.datetime.utcnow().minute
+    if MANUAL or minute < 5:
+        send_text(f"⚠️ Bot adımlardan birinde takıldı: {type(e).__name__}: {str(e)[:300]}")
+        if os.path.exists(SHOT):
+            send_photo("Takıldığı andaki ekran")
