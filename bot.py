@@ -22,7 +22,7 @@ def run():
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+            viewport={"width": 1280, "height": 1000}
         )
         page = context.new_page()
 
@@ -32,81 +32,94 @@ def run():
             page.wait_for_timeout(3000)
 
             # Çerez bildirimi varsa kapat
-            cookie = page.locator("button:has-text('Akzeptieren'), button:has-text('Zustimmen'), button:has-text('Schließen')")
-            if cookie.count() > 0 and cookie.first.is_visible():
-                cookie.first.click()
-                page.wait_for_timeout(1000)
-
-            # 2. Fahrerlaubnis kategorisini aç
-            cat = page.locator("text=Fahrerlaubnis").first
-            cat.scroll_into_view_if_needed()
-            cat.click()
-            page.wait_for_timeout(2000)
-
-            # 3. İlgili hizmeti bul ve miktarını artır
             page.evaluate("""
                 () => {
-                    const elements = Array.from(document.querySelectorAll('*'));
-                    const match = elements.find(el => el.children.length === 0 && el.textContent.includes('Umschreibung ausländischer Führerschein (sonstige Staaten)'));
-                    if (match) {
-                        const container = match.closest('tr') || match.closest('.concern') || match.parentElement.parentElement;
-                        if (container) {
-                            const plus = container.querySelector('input[value="+"], button.plus, .btn-plus, button:not([id*="Weiter"])');
-                            if (plus) plus.click();
-                            const input = container.querySelector('input[type="text"], input[type="number"]');
-                            if (input) {
-                                input.value = "1";
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                            }
-                        }
+                    const btns = Array.from(document.querySelectorAll('button, input, a'));
+                    const accept = btns.find(b => b.innerText && b.innerText.includes('Akzeptieren'));
+                    if (accept) accept.click();
+                    const modal = document.querySelector('.cookie-notice, #cookie-modal');
+                    if (modal) modal.remove();
+                }
+            """)
+            page.wait_for_timeout(1500)
+
+            # 2. Sayfa Schritt 2'de değilse Fahrerlaubnis seç
+            if "schritt 2" not in page.locator("body").inner_text().lower():
+                page.locator("text=Fahrerlaubnis").first.click()
+                page.wait_for_timeout(2000)
+
+            # 3. Akordiyon başlığını aç: "+ Umschreibung ausländische Fahrerlaubnis"
+            page.evaluate("""
+                () => {
+                    const accordions = Array.from(document.querySelectorAll('*'));
+                    const target = accordions.find(el => el.children.length === 0 && el.textContent.includes('Umschreibung ausländische Fahrerlaubnis'));
+                    if (target) {
+                        const parentBtn = target.closest('button') || target.closest('div');
+                        if (parentBtn) parentBtn.click();
                     }
                 }
             """)
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(1500)
 
-            # 4. Formu zorla ilerlet
+            # 4. Üçüncü sıradaki "sonstige Staaten" satırının artı (+) butonuna bas
             page.evaluate("""
                 () => {
-                    const form = document.querySelector('form');
-                    const btn = document.querySelector('#WeiterButton') || document.querySelector('input[value*="Weiter"]') || document.querySelector('button[name*="Weiter"]');
-                    if (btn) {
-                        btn.removeAttribute('disabled');
-                        btn.classList.remove('disabledButton');
-                        btn.click();
-                    } else if (form) {
-                        form.submit();
+                    const rows = Array.from(document.querySelectorAll('tr, div'));
+                    const row = rows.find(r => r.innerText && r.innerText.includes('sonstige Staaten'));
+                    if (row) {
+                        const plusBtn = row.querySelector('button, input[type="button"], a');
+                        if (plusBtn) plusBtn.click();
                     }
                 }
             """)
+            page.wait_for_timeout(1500)
 
-            # Takvim sayfasının yüklenmesini bekle
+            # 5. Açılan "Hinweis" uyarısındaki mavi "OK" butonuna tıkla
+            ok_button = page.locator("button:has-text('OK'), a:has-text('OK'), input[value='OK']").first
+            if ok_button.is_visible():
+                ok_button.click()
+                page.wait_for_timeout(1500)
+
+            # 6. Schritt 2'nin altındaki ilk "Weiter" butonuna bas
+            next_step_1 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            next_step_1.click()
             page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(3000)
 
-            # 5. Ekran görüntüsünü kaydet
+            # 7. Schritt 3 (Standortauswahl): İkinci "Weiter" butonuna bas
+            next_step_2 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            next_step_2.click()
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            # 8. Hedef ekran (Schritt 4) görüntüsünü al
             screenshot_path = "ekran_kaniti.png"
             page.screenshot(path=screenshot_path, full_page=True)
 
-            # 6. Müsaitlik durumunu tara
+            # 9. Randevu Kontrolü
             body_text = page.locator("body").inner_text().lower()
+            
+            # "keine zeiten verfügbar" veya "keine freien termine" varsa randevu kesinlikle yoktur
+            has_no_appointments = "keine zeiten verfügbar" in body_text or "keine freien termine" in body_text
+
+            # Tıklanabilir takvim slotu/tarih bağlantısı var mı?
             slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
 
-            if slots.count() > 0:
-                print(f"Randevu yakalandı! ({slots.count()} slot)")
-                caption = "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\nEhliyet için randevu bulundu! Hemen girin:\nhttps://termine.duesseldorf.de"
+            if not has_no_appointments and slots.count() > 0:
+                print("Randevu bulundu!")
+                caption = "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\nEhliyet için randevu açıldı! Hemen girin:\nhttps://termine.duesseldorf.de"
                 send_telegram_photo(caption, screenshot_path)
             else:
                 current_minute = datetime.utcnow().minute
                 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
-                # Saat başı taramasıysa (0-7 dk) veya manuel çalıştırmaysa kanıt görseli yolla
+                # Saat başı taramasıysa (0-7 dk) veya elle tetiklendiyse kanıt görselini at
                 if current_minute <= 7 or event_name == "workflow_dispatch":
-                    print("Saat başı kanıt görseli gönderiliyor...")
+                    print("Saat başı kanıtı gönderiliyor...")
                     caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Ekran görüntüsü ektedir."
                     send_telegram_photo(caption, screenshot_path)
                 else:
-                    print(f"5 dakikalık sessiz kontrol tamamlandı (Dakika: {current_minute}).")
+                    print(f"5 dakikalık periyodik kontrol yapıldı (Dakika: {current_minute}). Boş yer yok, sessiz mod.")
 
         except Exception as e:
             print(f"Hata: {e}")
