@@ -31,7 +31,7 @@ def run():
             page.goto("https://termine.duesseldorf.de/", timeout=60000)
             page.wait_for_timeout(3000)
 
-            # Çerez uyarısı varsa kapat
+            # Çerez bildirimi varsa kapat
             cookie = page.locator("button:has-text('Akzeptieren'), button:has-text('Zustimmen'), button:has-text('Schließen')")
             if cookie.count() > 0 and cookie.first.is_visible():
                 cookie.first.click()
@@ -43,70 +43,70 @@ def run():
             cat.click()
             page.wait_for_timeout(2000)
 
-            # 3. Umschreibung hizmetinde sayıyı 1 yap
-            service_row = page.locator("tr, div").filter(
-                has_text="Umschreibung ausländischer Führerschein (sonstige Staaten)"
-            ).first
-
-            plus_btn = service_row.locator("input[value='+'], button:has-text('+')").first
-            input_box = service_row.locator("input[type='text'], input[type='number']").first
-
-            if plus_btn.is_visible():
-                plus_btn.click(force=True)
-            elif input_box.is_visible():
-                input_box.fill("1")
-                input_box.dispatch_event("change")
-            else:
-                page.evaluate("""
-                    const rows = Array.from(document.querySelectorAll('tr, div'));
-                    const target = rows.find(r => r.innerText.includes('Umschreibung ausländischer Führerschein (sonstige Staaten)'));
-                    if (target) {
-                        const btn = target.querySelector('input[value="+"], button');
-                        if (btn) btn.click();
-                        const inp = target.querySelector('input[type="text"]');
-                        if (inp) { inp.value = "1"; inp.dispatchEvent(new Event('change', { bubbles: true })); }
+            # 3. İlgili hizmeti bul ve miktarını artır
+            page.evaluate("""
+                () => {
+                    const elements = Array.from(document.querySelectorAll('*'));
+                    const match = elements.find(el => el.children.length === 0 && el.textContent.includes('Umschreibung ausländischer Führerschein (sonstige Staaten)'));
+                    if (match) {
+                        const container = match.closest('tr') || match.closest('.concern') || match.parentElement.parentElement;
+                        if (container) {
+                            const plus = container.querySelector('input[value="+"], button.plus, .btn-plus, button:not([id*="Weiter"])');
+                            if (plus) plus.click();
+                            const input = container.querySelector('input[type="text"], input[type="number"]');
+                            if (input) {
+                                input.value = "1";
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                        }
                     }
-                """)
+                }
+            """)
+            page.wait_for_timeout(2000)
 
-            page.wait_for_timeout(2500)
+            # 4. Formu zorla ilerlet
+            page.evaluate("""
+                () => {
+                    const form = document.querySelector('form');
+                    const btn = document.querySelector('#WeiterButton') || document.querySelector('input[value*="Weiter"]') || document.querySelector('button[name*="Weiter"]');
+                    if (btn) {
+                        btn.removeAttribute('disabled');
+                        btn.classList.remove('disabledButton');
+                        btn.click();
+                    } else if (form) {
+                        form.submit();
+                    }
+                }
+            """)
 
-            # 4. Weiter butonuna bas
-            weiter_btn = page.locator("#WeiterButton, input[value='Weiter']").first
-            page.wait_for_function(
-                "document.querySelector('#WeiterButton') && !document.querySelector('#WeiterButton').classList.contains('disabledButton')",
-                timeout=10000
-            )
-            weiter_btn.click()
-
+            # Takvim sayfasının yüklenmesini bekle
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
-            # 5. O anki canlı ekran görüntüsünü al
+            # 5. Ekran görüntüsünü kaydet
             screenshot_path = "ekran_kaniti.png"
             page.screenshot(path=screenshot_path, full_page=True)
 
-            # 6. Randevu kontrolü
+            # 6. Müsaitlik durumunu tara
             body_text = page.locator("body").inner_text().lower()
             slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
 
-            # DURUM A: RANDEVU BULUNDU -> Dakikaya bakılmaksızın anında alarm ver
             if slots.count() > 0:
-                print(f"Randevu yakalandı! ({slots.count()} slot mevcut)")
+                print(f"Randevu yakalandı! ({slots.count()} slot)")
                 caption = "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\nEhliyet için randevu bulundu! Hemen girin:\nhttps://termine.duesseldorf.de"
                 send_telegram_photo(caption, screenshot_path)
-
-            # DURUM B: RANDEVU YOK
             else:
                 current_minute = datetime.utcnow().minute
                 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
-                # Saat başı taramasıysa (dakika 0-7 arası) veya manuel tetiklendiyse kanıt görseli gönder
+                # Saat başı taramasıysa (0-7 dk) veya manuel çalıştırmaysa kanıt görseli yolla
                 if current_minute <= 7 or event_name == "workflow_dispatch":
-                    print("Saat başı kanıtı Telegram'a gönderiliyor...")
-                    caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Güncel ekran görüntüsü ektedir."
+                    print("Saat başı kanıt görseli gönderiliyor...")
+                    caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Ekran görüntüsü ektedir."
                     send_telegram_photo(caption, screenshot_path)
                 else:
-                    print(f"5 dakikalık sessiz tarama (Dakika: {current_minute}): Randevu yok, bildirim atılmadı.")
+                    print(f"5 dakikalık sessiz kontrol tamamlandı (Dakika: {current_minute}).")
 
         except Exception as e:
             print(f"Hata: {e}")
