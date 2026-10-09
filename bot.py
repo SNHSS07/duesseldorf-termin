@@ -13,9 +13,9 @@ def send_telegram_photo(caption, image_path):
             files = {"photo": img}
             data = {"chat_id": CHAT_ID, "caption": caption}
             res = requests.post(url, data=data, files=files, timeout=30)
-            print("Telegram cevabi:", res.status_code)
+            print("Telegram yaniti:", res.status_code)
     except Exception as e:
-        print(f"Görsel gönderme hatasi: {e}")
+        print(f"Gorsel gonderme hatasi: {e}")
 
 def run():
     print("Düsseldorf randevu botu baslatiliyor...")
@@ -32,124 +32,98 @@ def run():
             page.goto("https://termine.duesseldorf.de/", timeout=60000)
             page.wait_for_timeout(3000)
 
-            # Çerez uyarısını kapat
+            # Çerez penceresini ve arkasındaki perdeyi doğrudan DOM'dan kaldır
             page.evaluate("""
                 () => {
-                    const btns = Array.from(document.querySelectorAll('*'));
-                    const accept = btns.find(b => b.innerText && b.innerText.trim() === 'Akzeptieren');
+                    const cookieElements = document.querySelectorAll('div[class*="cookie"], div[id*="cookie"], .modal-backdrop');
+                    cookieElements.forEach(el => el.remove());
+                    const btns = Array.from(document.querySelectorAll('button, a'));
+                    const accept = btns.find(b => b.textContent && b.textContent.includes('Akzeptieren'));
                     if (accept) accept.click();
                 }
             """)
             page.wait_for_timeout(1000)
 
-            # 2. Schritt 2'de değilsek Fahrerlaubnis seç
-            if "schritt 2" not in page.locator("body").inner_text().lower():
-                page.evaluate("""
-                    () => {
-                        const all = Array.from(document.querySelectorAll('*'));
-                        const item = all.find(el => el.innerText && el.innerText.trim() === 'Fahrerlaubnis');
-                        if (item) item.click();
-                    }
-                """)
-                page.wait_for_timeout(2000)
+            # 2. Schritt 1: Fahrerlaubnisbehörde seçeneğine tıkla
+            print("1. Adim: Fahrerlaubnisbehörde tiklaniyor...")
+            page.locator("text=Fahrerlaubnisbehörde").first.click(force=True)
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(2500)
 
-            # 3. Akordiyon başlığını aç (Umschreibung ausländische Fahrerlaubnis...)
-            print("Akordiyon basligi aciliyor...")
+            # Tekrar olası perde/overlay varsa temizle
             page.evaluate("""
                 () => {
-                    const all = Array.from(document.querySelectorAll('*'));
-                    const acc = all.find(el => el.innerText && el.innerText.includes('Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis'));
-                    if (acc) acc.click();
+                    const overlays = document.querySelectorAll('div[class*="cookie"], .modal-backdrop');
+                    overlays.forEach(el => el.remove());
+                }
+            """)
+
+            # 3. Schritt 2: Akordiyon başlığını aç
+            print("2. Adim: Akordiyon basligi aciliyor...")
+            page.locator("text=Umschreibung ausländische Fahrerlaubnis / Dienstfahrerlaubnis").first.click(force=True)
+            page.wait_for_timeout(1500)
+
+            # 4. "sonstige Staaten" satırının yanındaki "+" butonuna tıkla
+            print("3. Adim: 'sonstige Staaten' yanindaki '+' butonuna tiklaniyor...")
+            page.evaluate("""
+                () => {
+                    const allElements = Array.from(document.querySelectorAll('*'));
+                    const targetText = allElements.find(el => el.children.length === 0 && el.textContent.includes('sonstige Staaten'));
+                    if (targetText) {
+                        const container = targetText.closest('tr') || targetText.closest('li') || targetText.parentElement.parentElement;
+                        const plus = container.querySelector('button, input[type="button"], a, span, .btn');
+                        if (plus) plus.click();
+                    }
                 }
             """)
             page.wait_for_timeout(1500)
 
-            # 4. 'sonstige Staaten' satırını ve yanındaki '+' elementini tıkla
-            print("Hizmetin '+' ikonuna tiklaniyor...")
-            clicked = page.evaluate("""
-                () => {
-                    // Metni barındıran en alt elemanı bul
-                    const all = Array.from(document.querySelectorAll('*'));
-                    const match = all.find(el => el.children.length === 0 && el.textContent.includes('sonstige Staaten'));
-                    if (!match) return false;
+            # 5. Açılan "Hinweis" modal penceresindeki "OK" butonuna bas
+            print("4. Adim: Hinweis penceresindeki 'OK' butonuna tiklaniyor...")
+            ok_btn = page.locator("button:has-text('OK'), a:has-text('OK')").first
+            if ok_btn.is_visible():
+                ok_btn.click(force=True)
+                page.wait_for_timeout(1500)
 
-                    // Satır kapsayıcısını bul
-                    let parent = match.parentElement;
-                    while (parent && parent.tagName !== 'TR' && !parent.classList.contains('row') && !parent.classList.contains('concern')) {
-                        if (parent.querySelector('button, .btn, span, a')) break;
-                        parent = parent.parentElement;
-                    }
-
-                    // Satırdaki tüm elemanlar içinde text'i '+' olanı bul ve tıkla
-                    const rowElements = Array.from((parent || document).querySelectorAll('*'));
-                    const plus = rowElements.find(el => el.textContent.trim() === '+' || el.value === '+');
-                    if (plus) {
-                        plus.click();
-                        return true;
-                    }
-                    return false;
-                }
-            """)
-            print(f"Plus butonuna tiklandi mi: {clicked}")
-            page.wait_for_timeout(2000)
-
-            # 5. Açılan 'Hinweis' modal penceresindeki 'OK' butonuna tıkla
-            print("Modal OK araniyor...")
-            page.evaluate("""
-                () => {
-                    const all = Array.from(document.querySelectorAll('button, a, input'));
-                    const okBtn = all.find(el => el.innerText && el.innerText.trim().startsWith('OK'));
-                    if (okBtn) okBtn.click();
-                }
-            """)
-            page.wait_for_timeout(2000)
-
-            # 6. Schritt 2 altındaki 'Weiter' butonuna tıkla
-            print("1. Weiter tiklaniyor...")
-            page.evaluate("""
-                () => {
-                    const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
-                    if (btn) btn.click();
-                }
-            """)
+            # 6. Schritt 2'nin altındaki ilk "Weiter" butonuna tıkla
+            print("5. Adim: Ilk 'Weiter' butonuna basiliyor...")
+            weiter_1 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            weiter_1.click(force=True)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(3000)
 
-            # 7. Schritt 3 (Standortauswahl): İkinci 'Weiter' butonuna tıkla
-            print("2. Weiter tiklaniyor...")
-            page.evaluate("""
-                () => {
-                    const btn = document.querySelector('#WeiterButton') || Array.from(document.querySelectorAll('button, input')).find(b => b.value === 'Weiter' || b.innerText.includes('Weiter'));
-                    if (btn) btn.click();
-                }
-            """)
+            # 7. Schritt 3 (Standortauswahl): İkinci "Weiter" butonuna tıkla
+            print("6. Adim: Ikinci 'Weiter' butonuna basiliyor...")
+            weiter_2 = page.locator("#WeiterButton, input[value='Weiter'], button:has-text('Weiter')").first
+            weiter_2.click(force=True)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
             # 8. Schritt 4: Ekran görüntüsünü al
             screenshot_path = "ekran_kaniti.png"
             page.screenshot(path=screenshot_path, full_page=True)
-            print("Ekran goruntusu kaydedildi.")
+            print("7. Adim: Schritt 4 ekran goruntusu alindi.")
 
-            # 9. Randevu var mı kontrol et
+            # 9. Randevu Kontrolü
             body_text = page.locator("body").inner_text().lower()
             no_termin = "keine zeiten verfügbar" in body_text or "keine freien termine" in body_text
             slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
 
             if not no_termin and slots.count() > 0:
-                print(f"Randevu bulundu! ({slots.count()} slot)")
+                print("Randevu bulundu! Alarm gonderiliyor...")
                 caption = "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\nEhliyet için randevu açıldı! Hemen girin:\nhttps://termine.duesseldorf.de"
                 send_telegram_photo(caption, screenshot_path)
             else:
                 current_minute = datetime.utcnow().minute
                 event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
+                # Saat başı taramasıysa (0-7 dk) veya elle tetiklendiyse kanıt görselini yolla
                 if current_minute <= 7 or event_name == "workflow_dispatch":
-                    print("Saat basi raporu gonderiliyor...")
-                    caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Ekran görüntüsü ektedir."
+                    print("Saat basi kanit fotografi Telegram'a gonderiliyor...")
+                    caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok (Schritt 4 kanıtı ektedir)."
                     send_telegram_photo(caption, screenshot_path)
                 else:
-                    print(f"Sessiz tarama tamamlandi (Dakika: {current_minute}). Boş yer yok.")
+                    print(f"5 dakikalik kontrol tamamlandi (Dakika: {current_minute}). Bos yer yok, sessiz mod.")
 
         except Exception as e:
             print(f"Hata detayi: {e}")
