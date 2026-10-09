@@ -70,10 +70,48 @@ def run():
 
             page.wait_for_timeout(2500)
 
-            # 4. Weiter butonuna tıkla
+            # 4. Weiter butonuna bas
             weiter_btn = page.locator("#WeiterButton, input[value='Weiter']").first
             page.wait_for_function(
                 "document.querySelector('#WeiterButton') && !document.querySelector('#WeiterButton').classList.contains('disabledButton')",
                 timeout=10000
             )
-            weiter_btn.
+            weiter_btn.click()
+
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(4000)
+
+            # 5. O anki canlı ekran görüntüsünü al
+            screenshot_path = "ekran_kaniti.png"
+            page.screenshot(path=screenshot_path, full_page=True)
+
+            # 6. Randevu kontrolü
+            body_text = page.locator("body").inner_text().lower()
+            slots = page.locator("a.ekol-suggest-button, .suggest-cell a, .calendar-day.available, td.buchbar a")
+
+            # DURUM A: RANDEVU BULUNDU -> Dakikaya bakılmaksızın anında alarm ver
+            if slots.count() > 0:
+                print(f"Randevu yakalandı! ({slots.count()} slot mevcut)")
+                caption = "🚨 DÜSSELDORF RANDEVU ALARMI! 🚨\nEhliyet için randevu bulundu! Hemen girin:\nhttps://termine.duesseldorf.de"
+                send_telegram_photo(caption, screenshot_path)
+
+            # DURUM B: RANDEVU YOK
+            else:
+                current_minute = datetime.utcnow().minute
+                event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+
+                # Saat başı taramasıysa (dakika 0-7 arası) veya manuel tetiklendiyse kanıt görseli gönder
+                if current_minute <= 7 or event_name == "workflow_dispatch":
+                    print("Saat başı kanıtı Telegram'a gönderiliyor...")
+                    caption = "ℹ️ Saat Başı Durum Raporu:\nTarama aktif, şu an boş randevu yok. Güncel ekran görüntüsü ektedir."
+                    send_telegram_photo(caption, screenshot_path)
+                else:
+                    print(f"5 dakikalık sessiz tarama (Dakika: {current_minute}): Randevu yok, bildirim atılmadı.")
+
+        except Exception as e:
+            print(f"Hata: {e}")
+        finally:
+            browser.close()
+
+if __name__ == "__main__":
+    run()
